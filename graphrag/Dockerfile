@@ -4,7 +4,7 @@ WORKDIR /code
 COPY common/requirements.txt requirements.txt
 
 RUN apt-get update && apt-get upgrade -y
-RUN pip install -r requirements.txt
+RUN pip install --timeout=120 --retries=10 -r requirements.txt
 
 COPY graphrag/app /code
 COPY common /code/common

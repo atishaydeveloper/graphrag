@@ -1,0 +1,16 @@
+# Dev-only convenience symlinks (common/ and configs/ linked into each app dir
+# so uvicorn can run locally without Docker). On Windows these are checked out
+# by Git as broken text stubs, which collide with the Dockerfiles' explicit
+# `COPY common /code/common`. The build copies the real common/ separately, so
+# exclude the stubs from the build context entirely.
+graphrag/app/common
+graphrag/app/configs
+ecc/app/common
+ecc/app/configs
+report-service/app/common
+report-service/app/configs
+
+# Local clutter that never belongs in an image
+**/__pycache__
+**/*.pyc
+.git

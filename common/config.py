@@ -351,6 +351,9 @@ else:
 db_config = server_config.get("db_config")
 llm_config = server_config.get("llm_config")
 graphrag_config = server_config.get("graphrag_config")
+# Service-account + graph name for the ChatHistory store (Task 1). Optional —
+# falls back to db_config creds / "tigergraph" defaults in the store layer.
+chat_history_config = server_config.get("chat_history", {}) or {}
 
 if db_config is None:
     raise Exception("db_config is not found in SERVER_CONFIG")

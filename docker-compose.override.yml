@@ -1,0 +1,20 @@
+# Local dev override: runs TigerGraph Community Edition alongside GraphRAG.
+# Docker Compose auto-merges this with docker-compose.yml.
+# Not committed to git — purely for local setup.
+services:
+  tigergraph:
+    image: tigergraph/community:4.2.2
+    container_name: tigergraph
+    platform: linux/amd64
+    init: true
+    ulimits:
+      nofile:
+        soft: 1000000
+        hard: 1000000
+    ports:
+      - "14240:14240"
+    volumes:
+      - tigergraph_data:/home/tigergraph/tigergraph/data
+
+volumes:
+  tigergraph_data:

@@ -1,0 +1,71 @@
+/*
+ * Task 1 — Chat History read queries (installed on graph `ChatHistory`).
+ *
+ * Only the non-trivial *reads* are installed GSQL. Writes are done from Python
+ * via pyTigerGraph upsertVertices/upsertEdges (same pattern the ingestion
+ * engine uses) — no write queries needed.
+ *
+ * Isolation (design §6.1): every traversal STARTS from the authenticated
+ * user's `User` vertex, so a user can only ever reach their own data — the
+ * graph topology is not the security boundary; these queries are.
+ *
+ * Run on the ChatHistory graph:
+ *   gsql -f chat_history_queries.gsql
+ */
+
+USE GRAPH ChatHistory
+
+// List a user's conversation threads, most-recently-updated first.
+// Optional `graphname` filter (Option B): when set, keep only conversations that
+// contain at least one message answered against that KG. Empty = all KGs.
+CREATE OR REPLACE QUERY get_user_conversations(STRING user_id, STRING graphname="") FOR GRAPH ChatHistory {
+  Users = {User.*};
+  Convos = SELECT c
+           FROM Users:u -(HAS_CONVERSATION>:e)- Conversation:c
+           WHERE u.user_id == user_id;
+  IF graphname != "" THEN
+    Convos = SELECT c
+             FROM Convos:c -(HAS_MESSAGE>:e)- Message:m
+             WHERE m.graphname == graphname;
+  END;
+  Result = SELECT c FROM Convos:c ORDER BY c.updated_at DESC;
+  PRINT Result[
+    Result.conversation_id AS conversation_id,
+    Result.name AS name,
+    Result.graphname AS graphname,
+    Result.created_at AS created_at,
+    Result.updated_at AS updated_at
+  ] AS conversations;
+}
+
+// Most-recent `top_k` messages of one conversation, newest-first (the caller
+// reverses for chronological display). Scoped to the user for isolation: if
+// the conversation does not belong to `user_id`, the traversal yields nothing.
+CREATE OR REPLACE QUERY get_recent_messages(STRING user_id, STRING conversation_id, INT top_k=50, STRING graphname="") FOR GRAPH ChatHistory {
+  Users = {User.*};
+  Convo = SELECT c
+          FROM Users:u -(HAS_CONVERSATION>:e)- Conversation:c
+          WHERE u.user_id == user_id AND c.conversation_id == conversation_id;
+  // Optional per-message KG filter (Option B): empty = all turns; set = only
+  // the turns answered against that graph (a turn's user+system share a graph,
+  // so pairs stay intact).
+  Msgs = SELECT m
+         FROM Convo:c -(HAS_MESSAGE>:e)- Message:m
+         WHERE graphname == "" OR m.graphname == graphname
+         ORDER BY m.seq DESC
+         LIMIT top_k;
+  PRINT Msgs[
+    Msgs.message_id AS message_id,
+    Msgs.role AS role,
+    Msgs.content AS content,
+    Msgs.model_name AS model_name,
+    Msgs.graphname AS graphname,
+    Msgs.feedback AS feedback,
+    Msgs.comment AS comment,
+    Msgs.response_time AS response_time,
+    Msgs.seq AS seq,
+    Msgs.created_at AS created_at
+  ] AS messages;
+}
+
+INSTALL QUERY ALL

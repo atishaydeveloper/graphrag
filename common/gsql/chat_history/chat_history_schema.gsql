@@ -1,0 +1,110 @@
+/*
+ * Task 1 — Chat History & Trace Log persistence in TigerGraph.
+ *
+ * Creates a DEDICATED, STANDALONE graph `ChatHistory` that holds all users'
+ * conversations and execution traces — physically separate from every
+ * knowledge graph (e.g. TigerGraphRAG), so GraphRAG retrieval can NEVER
+ * traverse chat data (design decisions D1 + D3).
+ *
+ * The vertex/edge types are created at the GLOBAL scope but included ONLY in
+ * this graph, so knowledge-graph schemas remain untouched (no retrieval
+ * pollution). There are NO vector attributes — chat retrieval is by
+ * recency/thread, never semantic similarity (D11).
+ *
+ * Run once (global scope):
+ *   gsql -f chat_history_schema.gsql
+ */
+
+/* ------------------------------------------------------------------ */
+/* Vertices                                                            */
+/* ------------------------------------------------------------------ */
+
+// One per user. NOT an auth record — TigerGraph remains the identity source
+// of truth. This is just an anchor for conversations, lazily upserted from
+// the authenticated TG username (D10).
+CREATE VERTEX User (
+    PRIMARY_ID user_id STRING
+) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true"
+
+// One per conversation thread. `graphname` records the KG the conversation
+// STARTED in. A conversation may later span KGs (Option B) — the authoritative
+// per-answer KG lives on Message.graphname; the conversation-list filter matches
+// conversations that contain a message from the target KG.
+CREATE VERTEX Conversation (
+    PRIMARY_ID conversation_id STRING,
+    name STRING,
+    graphname STRING,
+    created_at UINT,
+    updated_at UINT
+) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true"
+
+// One per message. Separate vertex per role (D6); role is an attribute, not an
+// edge type (D7). `seq` gives a robust monotonic order within a conversation
+// to complement the NEXT chain (D8).
+CREATE VERTEX Message (
+    PRIMARY_ID message_id STRING,
+    role STRING,                 // "user" | "system"
+    content STRING,
+    model_name STRING,
+    graphname STRING,            // the KG this message was answered against (D12 / Option B:
+                                 // a conversation may span KGs; each message records its own)
+    feedback INT,                // 0 = none, 1 = thumbs-up, 2 = thumbs-down
+    comment STRING,
+    response_time DOUBLE,
+    seq UINT,
+    created_at UINT
+) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true"
+
+// One per assistant message (1:1, keyed by the same message_id). Holds the
+// execution-trace blob; `query_sources` is serialized JSON rather than its own
+// vertex sub-tree, because the agent emits no discrete per-step data (D9).
+CREATE VERTEX TraceLog (
+    PRIMARY_ID message_id STRING,
+    conversation_id STRING,
+    username STRING,                       // owner — used by the access check
+    user_query STRING,
+    query_sources STRING,                  // serialized JSON
+    response_type STRING,
+    answered_question BOOL,
+    response_time DOUBLE,
+    natural_language_response STRING,
+    timestamp UINT
+) WITH STATS="OUTDEGREE_BY_EDGETYPE", PRIMARY_ID_AS_ATTRIBUTE="true"
+
+/* ------------------------------------------------------------------ */
+/* Edges                                                               */
+/*                                                                     */
+/* All directed, all with a REVERSE_EDGE so we can traverse both ways: */
+/*   - forward  → write / list / expand                                */
+/*   - backward → ownership checks (Message→Conversation→User) and     */
+/*     reverse-walking the NEXT chain from the tail to fetch the most  */
+/*     recent N messages (D8).                                         */
+/* ------------------------------------------------------------------ */
+
+CREATE DIRECTED EDGE HAS_CONVERSATION (FROM User, TO Conversation)
+    WITH REVERSE_EDGE="reverse_HAS_CONVERSATION"
+
+CREATE DIRECTED EDGE HAS_MESSAGE (FROM Conversation, TO Message)
+    WITH REVERSE_EDGE="reverse_HAS_MESSAGE"
+
+// Linear conversation order (D5: branching is unused; this generalizes to a
+// tree for free if regenerate is ever built).
+CREATE DIRECTED EDGE NEXT (FROM Message, TO Message)
+    WITH REVERSE_EDGE="reverse_NEXT"
+
+// Tail pointer → O(N) reverse-walk for "recent N" without a global sort (D8).
+CREATE DIRECTED EDGE LAST_MESSAGE (FROM Conversation, TO Message)
+    WITH REVERSE_EDGE="reverse_LAST_MESSAGE"
+
+// 1:1 link from an assistant Message to its execution trace.
+CREATE DIRECTED EDGE HAS_TRACE (FROM Message, TO TraceLog)
+    WITH REVERSE_EDGE="reverse_HAS_TRACE"
+
+/* ------------------------------------------------------------------ */
+/* Graph                                                               */
+/* ------------------------------------------------------------------ */
+
+CREATE GRAPH ChatHistory (
+    User, Conversation, Message, TraceLog,
+    HAS_CONVERSATION, HAS_MESSAGE, NEXT, LAST_MESSAGE, HAS_TRACE
+)
