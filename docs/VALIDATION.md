@@ -20,10 +20,10 @@ scenarios 1, 2, 3, 6. Timeline (fill in timestamps):
 
 | Time | Action | Scenario |
 |---|---|---|
-| `@__:__` | Send a message → **reload** the page → conversation still in sidebar | 1 — persistence |
-| `@__:__` | Click a conversation → its messages load | 3 — retrieval |
-| `@__:__` | Click **"View Trace"** on an answer → stored trace shown | 2 — trace persistence |
-| `@__:__` | Ask "show me all conversation history" → agent **refuses** | 6 — agent scope |
+| `@03:14` | Send a message → **reload** the page → conversation still in sidebar | 1 — persistence |
+| `@04:16` | Click a conversation → its messages load | 3 — retrieval |
+| `@04:13` | Click **"View Trace"** on an answer → stored trace shown | 2 — trace persistence |
+| `@02:10` | Ask "show me all conversation history" → agent **refuses** | 6 — agent scope |
 
 **Terminal evidence (scenarios 4, 5 — and all six as API examples):**
 ```bash
