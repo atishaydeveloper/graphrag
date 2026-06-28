@@ -55,3 +55,5 @@ docker exec -w /code/tests_chat_history graphrag python run_all.py
 - Design: [DESIGN-OVERVIEW.md](DESIGN-OVERVIEW.md) → [task1](design/task1-chat-history-trace-persistence.md) · [task2](design/task2-conversation-access-control.md) · [task3](design/task3-agent-access-restrictions.md)
 - Setup: [SETUP.md](SETUP.md) · Changes: [CHANGES.md](CHANGES.md) · Test cases: [TEST-CASES.md](TEST-CASES.md)
 - Tests: [`tests/chat_history/`](../tests/chat_history)
+- Demo-video: [Agivant-Demo-video](https://drive.google.com/file/d/1LIf__4vFSh1B464YZKFytYoL1rYZi6PN/view?usp=sharing)
+- Screenshots: [Task 1,2,3 tests](ss01.png) / [Scenario 4 and 5](ss02.png)
