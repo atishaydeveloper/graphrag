@@ -53,7 +53,7 @@ from pyTigerGraph import TigerGraphConnection
 from pyTigerGraph.common.exception import TigerGraphException
 from tools.validation_utils import MapQuestionToSchemaException
 
-from common.config import db_config, graphrag_config, embedding_service, llm_config, service_status, get_chat_config, get_completion_config, get_embedding_config, get_multimodal_config, validate_graphname, get_llm_service, resolve_llm_services
+from common.config import db_config, graphrag_config, embedding_service, llm_config, service_status, get_chat_config, get_completion_config, get_embedding_config, get_multimodal_config, validate_graphname, get_llm_service, resolve_llm_services, chat_history_config
 from common.db.connections import get_db_connection_pwd_manual
 from common.db import schema_utils as schema_utils_mod
 from common.db import schema_extraction as schema_extraction_mod
@@ -513,6 +513,14 @@ def auth(usr: str, password: str, conn=None) -> tuple[list[str], TigerGraphConne
     try:
         graph_list = conn.listGraphs()
         graphs = [g["graphName"] for g in graph_list if "graphName" in g]
+
+        # Hide the internal ChatHistory store from the user-facing graph list.
+        # It's a backend operational graph (conversations/traces), NOT a
+        # knowledge graph to chat against — but a superuser would otherwise see
+        # it in the UI graph selector. Filtering here covers every consumer
+        # (login, /list_graphs, chat auth) since they all flow through auth().
+        _chat_graph = chat_history_config.get("graph", "ChatHistory")
+        graphs = [g for g in graphs if g != _chat_graph]
 
     except requests.exceptions.HTTPError as e:
         raise HTTPException(
@@ -2469,10 +2477,12 @@ async def get_user_roles(
     return {"roles": roles, "graph_roles": graph_roles}
 
 
-@router.get(route_prefix + "/conversation/{conversation_id}")
+@router.get(route_prefix + "/conversation")
 async def get_conversation_contents(
-    conversation_id: str,
     creds: Annotated[tuple[list[str], HTTPBasicCredentials], Depends(ui_basic_auth)],
+    # conversation_id travels in a header, not the URL, so it never lands in
+    # access logs / browser history / Referer (Task 2 leakage hardening).
+    conversation_id: Annotated[str, Header(alias="X-Conversation-Id")],
     graphname: str | None = None,
 ):
     creds = creds[1]
@@ -2517,10 +2527,11 @@ async def get_conversation_feedback(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@router.delete(route_prefix + "/conversation/{conversation_id}")
+@router.delete(route_prefix + "/conversation")
 async def delete_conversation(
-    conversation_id: str,
     creds: Annotated[tuple[list[str], HTTPBasicCredentials], Depends(ui_basic_auth)],
+    # conversation_id in a header, not the URL — see get_conversation_contents.
+    conversation_id: Annotated[str, Header(alias="X-Conversation-Id")],
 ):
     """Delete a conversation and all its messages."""
     creds = creds[1]
@@ -2562,6 +2573,32 @@ async def emit_progress(agent: TigerGraphAgent, ws: WebSocket):
                 return message.model_dump_json()
 
 
+# Requests that target conversation history or other users' data are out of
+# scope for the knowledge-graph agent — and the agent has no path to that data
+# anyway (ChatHistory is a separate graph with no agent tooling; see the Task 3
+# design doc). We refuse them deterministically BEFORE the agent runs so it
+# can't be coaxed (e.g. via prompt injection) into fabricating a misleading
+# "here is everyone's history" answer over unrelated KG content.
+_AGENT_REFUSAL = (
+    "I can only answer questions about the selected knowledge graph. "
+    "I don't have access to conversation history or other users' data."
+)
+_HISTORY_PROBE_PATTERNS = (
+    "conversation history", "chat history", "other user", "all users",
+    "every user", "everyone's chat", "everyones chat", "all conversations",
+    "all the conversations", "all chats", "every conversation", "message vertex",
+    "conversation vertex", "dump all", "show me all chats",
+    "list all conversations", "all conversation history",
+)
+
+
+def _is_history_probe(question: str) -> bool:
+    """Heuristic gate for conversation-history / cross-user exfiltration asks.
+    Deterministic backstop paired with the chatbot_response prompt instruction."""
+    ql = (question or "").lower()
+    return any(p in ql for p in _HISTORY_PROBE_PATTERNS)
+
+
 async def run_agent(
     agent: TigerGraphAgent,
     data: str,
@@ -2569,6 +2606,14 @@ async def run_agent(
     graphname,
     ws: WebSocket,
 ) -> GraphRAGResponse:
+    # Task 3: refuse conversation-history / cross-user probes up front, before
+    # the agent (and any tool) runs.
+    if _is_history_probe(data):
+        return GraphRAGResponse(
+            natural_language_response=_AGENT_REFUSAL,
+            answered_question=False,
+            response_type="inquiryai",
+        )
     resp = GraphRAGResponse(
         natural_language_response="", answered_question=False, response_type="inquiryai"
     )
@@ -2695,9 +2740,13 @@ async def graph_query(
     creds: Annotated[tuple[list[str], HTTPBasicCredentials], Depends(ui_basic_auth)],
     q: str | None = None,
     rag_pattern: str | None = None,
-    conversation_id: str | None = None,
+    # conversation_id in a header, not the query string, to keep it out of logs.
+    conversation_id: Annotated[str | None, Header(alias="X-Conversation-Id")] = None,
 ):
     creds = creds[1]
+    # Defense-in-depth: the internal ChatHistory store is not a chattable KG.
+    if graphname == chat_history_config.get("graph", "ChatHistory"):
+        raise HTTPException(status_code=404, detail="Graph not found")
     auth_header = "Basic " + base64.b64encode(
         f"{creds.username}:{creds.password}".encode()
     ).decode()
@@ -2795,6 +2844,11 @@ async def chat(
         usr_auth = await asyncio.wait_for(websocket.receive_text(), timeout=10.0)
         logger.info(f"Received authentication data, length: {len(usr_auth)}")
         _, conn = ws_basic_auth(usr_auth, graphname)
+
+        # Defense-in-depth: the internal ChatHistory store is not a chattable KG.
+        if graphname == chat_history_config.get("graph", "ChatHistory"):
+            await websocket.close(code=1008, reason="Graph not found")
+            return
 
         # If the embedding store is currently unavailable, advise the
         # client now that the caller is authenticated. The chat still

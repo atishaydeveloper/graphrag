@@ -139,7 +139,11 @@ const SideMenu = ({
       // Wait for all conversation details to be fetched
       const conversationPromises = sortedData.map(async (item: any) => {
         try {
-          const response2 = await fetch(`${WS_CONVO_URL}/${item.conversation_id}`, settings);
+          // conversation_id goes in a header, not the URL, so it stays out of access logs.
+          const response2 = await fetch(WS_CONVO_URL, {
+            ...settings,
+            headers: { ...settings.headers, "X-Conversation-Id": item.conversation_id },
+          });
           if (!response2.ok) {
             return null;
           }
@@ -222,7 +226,11 @@ const SideMenu = ({
         }
       }
 
-      const response = await fetch(`${WS_CONVO_URL}/${id}`, settings);
+      // conversation_id in a header, not the URL (keeps it out of access logs).
+      const response = await fetch(WS_CONVO_URL, {
+        ...settings,
+        headers: { ...settings.headers, "X-Conversation-Id": id },
+      });
       if (!response.ok) {
         return;
       }
